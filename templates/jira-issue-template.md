@@ -1,3 +1,7 @@
+Description
+
+The following vulnerabitily was found in the project:
+
 **Issue ID**: {{id}}
 
 **Module Name**: {{module_name}}
@@ -14,4 +18,6 @@
 
 **Dependents**: {{dependents}}
 
-Please address this issue as soon as possible.
+Technical Requirements
+
+- [ ] {{issue}}: is resolved by future audit
