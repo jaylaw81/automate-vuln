@@ -35,7 +35,22 @@ const saveTrackedVulnerabilities = (data) => {
 const runYarnAudit = () => {
 	return new Promise((resolve, reject) => {
 		const vulnerabilities = [];
-		const yarnAudit = spawn("yarn", ["npm", "audit", "-R", "--json"]);
+
+		const yarnVersion = spawn("yarn", ["--version"]);
+
+		const spawnCmd = [];
+
+		yarnVersion.stdout.on("data", (data) => {
+			console.log(`Yarn version: ${data}`);
+			if (parseInt(data) >= 4) {
+				console.log("Yarn 4 detected. Using yarn npm audit -R --json.");
+				spawnCmd.push("npm", "audit", "-R", "--json");
+			} else {
+				console.log("< Yarn 4 detected. Using yarn audit --json.");
+				spawnCmd.push("audit", "--json");
+			}
+		});
+		const yarnAudit = spawn("yarn", [spawnCmd]);
 
 		yarnAudit.stdout.on("data", (data) => {
 			const lines = data.toString().split("\n");
