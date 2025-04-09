@@ -40,14 +40,18 @@ const runYarnAudit = () => {
 
 		const spawnCmd = [];
 
+		let yarnSetVersion = "";
+
 		yarnVersion.stdout.on("data", (data) => {
 			console.log(`Yarn version: ${data}`);
 			if (parseInt(data) >= 4) {
 				console.log("Yarn 4 detected. Using yarn npm audit -R --json.");
 				spawnCmd.push("npm", "audit", "-R", "--json");
+				yarnSetVersion = 4;
 			} else {
 				console.log("< Yarn 4 detected. Using yarn audit --json.");
 				spawnCmd.push("audit", "--json");
+				yarnSetVersion = 3;
 			}
 		});
 		const yarnAudit = spawn("yarn", [spawnCmd]);
@@ -84,10 +88,18 @@ const runYarnAudit = () => {
 		});
 
 		yarnAudit.on("close", (code) => {
-			if (code === 1) {
-				resolve(vulnerabilities);
+			if (yarnSetVersion === 4) {
+				if (code === 1) {
+					resolve(vulnerabilities);
+				} else {
+					reject(new Error(`yarn audit exited with code ${code}`));
+				}
 			} else {
-				reject(new Error(`yarn audit exited with code ${code}`));
+				if (code === 0) {
+					resolve(vulnerabilities);
+				} else {
+					reject(new Error(`yarn audit exited with code ${code}`));
+				}
 			}
 		});
 	});
