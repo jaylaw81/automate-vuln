@@ -1,4 +1,4 @@
-const fs = require("fs");
+const fs = require("node:fs");
 // File to track created tickets
 const TRACKING_FILE = "./vulnerabilities-tracked.json";
 

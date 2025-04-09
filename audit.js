@@ -1,7 +1,7 @@
-const { spawn, execSync } = require("child_process");
+const { spawn, execSync } = require("node:child_process");
 const axios = require("axios");
-const path = require("path");
-const fs = require("fs");
+const path = require("node:path");
+const fs = require("node:fs");
 const yarnUtils = require("./utils/yarn");
 const jiraUtils = require("./utils/jira");
 const fileUtils = require("./utils/files");
@@ -63,9 +63,9 @@ const validateTrackedWithJira = async (trackedVulnerabilities, epicKey) => {
 
 	// Create a map of child issues from Jira
 	const jiraIssuesMap = {};
-	childIssues.forEach((issue) => {
+	for (const issue of childIssues) {
 		jiraIssuesMap[issue.key] = issue;
-	});
+	}
 
 	// Update the tracking file
 	const updatedTrackedVulnerabilities = {};
@@ -92,7 +92,7 @@ const validateTrackedWithJira = async (trackedVulnerabilities, epicKey) => {
 	}
 
 	// Check if any tickets from Jira are missing in the tracking file
-	childIssues.forEach((issue) => {
+	for (const issue of childIssues) {
 		// If the ticket is not already in the tracking file, add it
 		const isTracked = Object.values(trackedVulnerabilities).some(
 			(tracked) => tracked.ticketKey === issue.key,
@@ -108,7 +108,7 @@ const validateTrackedWithJira = async (trackedVulnerabilities, epicKey) => {
 				`Ticket ${issue.key} (${issue.summary}) is missing from tracking. Adding it.`,
 			);
 		}
-	});
+	}
 
 	// Save the updated tracking file
 	fileUtils.saveTrackedVulnerabilities(updatedTrackedVulnerabilities);
@@ -130,7 +130,7 @@ const runYarnAudit = (yarnVersion) => {
 
 		yarnAudit.stdout.on("data", (data) => {
 			const lines = data.toString().split("\n");
-			lines.forEach((line) => {
+			for (const line of lines) {
 				try {
 					const jsonLine = JSON.parse(line);
 
@@ -190,7 +190,7 @@ const runYarnAudit = (yarnVersion) => {
 				} catch (err) {
 					// Ignore lines that cannot be parsed as JSON
 				}
-			});
+			}
 		});
 
 		yarnAudit.stderr.on("data", (data) => {
