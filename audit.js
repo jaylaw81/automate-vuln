@@ -33,6 +33,157 @@ const getYarnVersion = () => {
 	}
 };
 
+const fetchChildIssues = async (epicKey) => {
+	try {
+		// Use JQL to find all child issues linked to the epic
+		const jql = `parent=${epicKey}`;
+		const response = await axios.get(`${JIRA_BASE_URL}/rest/api/2/search`, {
+			params: {
+				jql, // Jira Query Language query
+				fields: "key,summary,status", // Fetch only the fields we care about
+				maxResults: 1000, // Adjust as needed for larger projects
+			},
+			auth: {
+				username: JIRA_API_EMAIL,
+				password: JIRA_API_TOKEN,
+			},
+		});
+
+		// Return the list of child issues
+		return response.data.issues.map((issue) => ({
+			key: issue.key,
+			summary: issue.fields.summary,
+			status: issue.fields.status.name,
+		}));
+	} catch (error) {
+		console.error(
+			`Error fetching child issues for epic ${epicKey}:`,
+			error.response?.data || error.message,
+		);
+		throw error;
+	}
+};
+
+const getJiraTicketStatus = async (ticketKey) => {
+	try {
+		const response = await axios.get(
+			`${JIRA_BASE_URL}/rest/api/2/issue/${ticketKey}`,
+			{
+				auth: {
+					username: JIRA_API_EMAIL,
+					password: JIRA_API_TOKEN,
+				},
+			},
+		);
+		// Extract the status from the response
+		return response.data.fields.status.name;
+	} catch (error) {
+		if (error.response?.status === 404) {
+			console.warn(`Ticket ${ticketKey} not found in Jira.`);
+			return null; // Ticket no longer exists
+		}
+		console.error(
+			`Error fetching ticket status for ${ticketKey}:`,
+			error.response?.data || error.message,
+		);
+		throw error; // Rethrow other errors
+	}
+};
+
+const validateTrackedVulnerabilities = async (trackedVulnerabilities) => {
+	const updatedTrackedVulnerabilities = { ...trackedVulnerabilities };
+
+	for (const [id, { ticketKey, module_name }] of Object.entries(
+		trackedVulnerabilities,
+	)) {
+		console.log(
+			`Checking status of Jira ticket ${ticketKey} for ${module_name}...`,
+		);
+		const status = await getJiraTicketStatus(ticketKey);
+
+		if (!status) {
+			// Ticket no longer exists, remove it from tracking
+			console.log(
+				`Ticket ${ticketKey} no longer exists. Removing from tracking.`,
+			);
+			delete updatedTrackedVulnerabilities[id];
+		} else if (
+			status.toLowerCase() === "closed" ||
+			status.toLowerCase() === "done"
+		) {
+			// Ticket is closed, remove it from tracking
+			console.log(`Ticket ${ticketKey} is closed. Removing from tracking.`);
+			delete updatedTrackedVulnerabilities[id];
+		} else {
+			// Ticket is still open, keep it in the tracking file
+			console.log(`Ticket ${ticketKey} is still open (${status}).`);
+		}
+	}
+
+	// Save the updated tracking file
+	saveTrackedVulnerabilities(updatedTrackedVulnerabilities);
+	return updatedTrackedVulnerabilities;
+};
+
+const validateTrackedWithJira = async (trackedVulnerabilities, epicKey) => {
+	// Fetch the child issues from Jira
+	console.log(`Fetching child issues for epic ${epicKey}...`);
+	const childIssues = await fetchChildIssues(epicKey);
+
+	// Create a map of child issues from Jira
+	const jiraIssuesMap = {};
+	childIssues.forEach((issue) => {
+		jiraIssuesMap[issue.key] = issue;
+	});
+
+	// Update the tracking file
+	const updatedTrackedVulnerabilities = {};
+
+	// Check if all tracked vulnerabilities still exist in Jira
+	for (const [id, { ticketKey, module_name }] of Object.entries(
+		trackedVulnerabilities,
+	)) {
+		if (jiraIssuesMap[ticketKey]) {
+			// Ticket exists in Jira, keep it in the tracking file
+			updatedTrackedVulnerabilities[id] = {
+				module_name,
+				ticketKey,
+			};
+			console.log(
+				`Ticket ${ticketKey} (${module_name}) is valid and still tracked.`,
+			);
+		} else {
+			// Ticket no longer exists in Jira, remove it
+			console.log(
+				`Ticket ${ticketKey} (${module_name}) no longer exists in Jira. Removing from tracking.`,
+			);
+		}
+	}
+
+	// Check if any tickets from Jira are missing in the tracking file
+	childIssues.forEach((issue) => {
+		// If the ticket is not already in the tracking file, add it
+		const isTracked = Object.values(trackedVulnerabilities).some(
+			(tracked) => tracked.ticketKey === issue.key,
+		);
+		if (!isTracked) {
+			// Add the missing ticket to the tracking file
+			const id = `jira-${issue.key}`;
+			updatedTrackedVulnerabilities[id] = {
+				module_name: issue.summary || "Unknown",
+				ticketKey: issue.key,
+			};
+			console.log(
+				`Ticket ${issue.key} (${issue.summary}) is missing from tracking. Adding it.`,
+			);
+		}
+	});
+
+	// Save the updated tracking file
+	saveTrackedVulnerabilities(updatedTrackedVulnerabilities);
+	return updatedTrackedVulnerabilities;
+};
+
 // Helper function to read/write tracked vulnerabilities
 const loadTrackedVulnerabilities = () => {
 	if (fs.existsSync(TRACKING_FILE)) {
@@ -49,8 +200,6 @@ const saveTrackedVulnerabilities = (data) => {
 const runYarnAudit = (yarnVersion) => {
 	return new Promise((resolve, reject) => {
 		const vulnerabilities = [];
-
-		let spawnCmd = "";
 
 		let yarnAudit = "";
 
@@ -130,11 +279,6 @@ const runYarnAudit = (yarnVersion) => {
 		});
 
 		yarnAudit.on("close", (code) => {
-			// if (code === 1) {
-			// 	resolve(vulnerabilities);
-			// } else {
-			// 	reject(new Error(`yarn audit exited with code ${code}`));
-			// }
 			resolve(vulnerabilities);
 		});
 	});
@@ -227,9 +371,20 @@ const main = async () => {
 	// Detect the Yarn version
 	const yarnVersion = getYarnVersion();
 
-	const vulnerabilities = await runYarnAudit(yarnVersion);
+	let trackedVulnerabilities = loadTrackedVulnerabilities();
 
-	const trackedVulnerabilities = loadTrackedVulnerabilities();
+	// Validate the tracking file against Jira
+	console.log("Validating tracked tickets with Jira...");
+	trackedVulnerabilities = await validateTrackedWithJira(
+		trackedVulnerabilities,
+		JIRA_EPIC_KEY,
+	);
+
+	trackedVulnerabilities = await validateTrackedVulnerabilities(
+		trackedVulnerabilities,
+	);
+
+	const vulnerabilities = await runYarnAudit(yarnVersion);
 
 	for (const vulnerability of vulnerabilities) {
 		const { id, module_name } = vulnerability;
@@ -243,6 +398,7 @@ const main = async () => {
 			`Creating Jira ticket for vulnerability ${id} (${module_name})...`,
 		);
 		const ticketKey = await createJiraTicket(vulnerability, JIRA_EPIC_KEY);
+
 		if (ticketKey) {
 			trackedVulnerabilities[id] = {
 				module_name,
