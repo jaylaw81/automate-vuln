@@ -1,4 +1,4 @@
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const axios = require("axios");
 const fs = require("fs");
 
@@ -19,6 +19,19 @@ if (!JIRA_API_EMAIL || !JIRA_API_TOKEN || !JIRA_BASE_URL || !JIRA_PROJECT_KEY) {
 // File to track created tickets
 const TRACKING_FILE = "./vulnerabilities-tracked.json";
 
+const getYarnVersion = () => {
+	try {
+		const version = execSync("yarn --version").toString().trim();
+		console.log(`Detected Yarn version: ${version}`);
+		return version;
+	} catch (error) {
+		console.error(
+			"Failed to detect Yarn version. Ensure Yarn is installed and in your PATH.",
+		);
+		process.exit(1);
+	}
+};
+
 // Helper function to read/write tracked vulnerabilities
 const loadTrackedVulnerabilities = () => {
 	if (fs.existsSync(TRACKING_FILE)) {
@@ -32,13 +45,19 @@ const saveTrackedVulnerabilities = (data) => {
 };
 
 // Run `yarn audit` and parse vulnerabilities
-const runYarnAudit = () => {
+const runYarnAudit = (yarnVersion) => {
 	return new Promise((resolve, reject) => {
 		const vulnerabilities = [];
 
 		let spawnCmd = "";
 
-		const yarnAudit = spawn("yarn", ["npm", "audit", "-R", "--json"]);
+		let yarnAudit = "";
+
+		if (yarnVersion.startsWith("4.")) {
+			yarnAudit = spawn("yarn", ["npm", "audit", "-R", "--json"]);
+		} else {
+			yarnAudit = spawn("yarn", ["audit", "--json"]);
+		}
 
 		yarnAudit.stdout.on("data", (data) => {
 			const lines = data.toString().split("\n");
@@ -46,20 +65,58 @@ const runYarnAudit = () => {
 				try {
 					const jsonLine = JSON.parse(line);
 
-					// Check if this is a vulnerability report line
-					if (jsonLine.value && jsonLine.children) {
-						const vulnerability = {
-							module_name: jsonLine.value,
-							id: jsonLine.children.ID,
-							issue: jsonLine.children.Issue,
-							url: jsonLine.children.URL,
-							severity: jsonLine.children.Severity,
-							vulnerable_versions: jsonLine.children["Vulnerable Versions"],
-							tree_versions: jsonLine.children["Tree Versions"],
-							dependents: jsonLine.children.Dependents,
-						};
-
-						vulnerabilities.push(vulnerability);
+					// Different parsing logic based on Yarn version
+					if (yarnVersion.startsWith("1.")) {
+						// Yarn v1.x parsing
+						if (jsonLine.type === "auditAdvisory") {
+							const advisory = jsonLine.data.advisory;
+							const vulnerability = {
+								module_name: advisory.module_name,
+								id: advisory.id,
+								issue: advisory.title,
+								url: advisory.url,
+								severity: advisory.severity,
+								vulnerable_versions: advisory.vulnerable_versions,
+								tree_versions: advisory.findings.map((f) => f.version),
+								dependents: advisory.findings.map((f) => f.paths).flat(),
+							};
+							vulnerabilities.push(vulnerability);
+						}
+					} else if (
+						yarnVersion.startsWith("2.") ||
+						yarnVersion.startsWith("3.")
+					) {
+						// Yarn v2.x or v3.x parsing
+						// Adjust parsing logic if needed (similar to v1 but with slight changes)
+						if (jsonLine.type === "auditAdvisory" || jsonLine.advisory) {
+							const advisory = jsonLine.advisory || jsonLine.data.advisory;
+							const vulnerability = {
+								module_name: advisory.module_name,
+								id: advisory.id,
+								issue: advisory.title,
+								url: advisory.url,
+								severity: advisory.severity,
+								vulnerable_versions: advisory.vulnerable_versions,
+								tree_versions: advisory.findings.map((f) => f.version),
+								dependents: advisory.findings.map((f) => f.paths).flat(),
+							};
+							vulnerabilities.push(vulnerability);
+						}
+					} else if (yarnVersion.startsWith("4.")) {
+						// Yarn v4.x parsing (current implementation)
+						if (jsonLine.value && jsonLine.children) {
+							const vulnerability = {
+								module_name: jsonLine.value,
+								id: jsonLine.children.ID,
+								issue: jsonLine.children.Issue,
+								url: jsonLine.children.URL,
+								severity: jsonLine.children.Severity,
+								vulnerable_versions: jsonLine.children["Vulnerable Versions"],
+								tree_versions: jsonLine.children["Tree Versions"],
+								dependents: jsonLine.children.Dependents,
+							};
+							vulnerabilities.push(vulnerability);
+						}
 					}
 				} catch (err) {
 					// Ignore lines that cannot be parsed as JSON
@@ -143,7 +200,10 @@ const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
 // Main function
 const main = async () => {
 	console.log("Running yarn audit...");
-	const vulnerabilities = await runYarnAudit();
+	// Detect the Yarn version
+	const yarnVersion = getYarnVersion();
+
+	const vulnerabilities = await runYarnAudit(yarnVersion);
 
 	const trackedVulnerabilities = loadTrackedVulnerabilities();
 
