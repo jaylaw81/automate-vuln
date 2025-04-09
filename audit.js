@@ -129,11 +129,12 @@ const runYarnAudit = (yarnVersion) => {
 		});
 
 		yarnAudit.on("close", (code) => {
-			if (code === 1) {
-				resolve(vulnerabilities);
-			} else {
-				reject(new Error(`yarn audit exited with code ${code}`));
-			}
+			// if (code === 1) {
+			// 	resolve(vulnerabilities);
+			// } else {
+			// 	reject(new Error(`yarn audit exited with code ${code}`));
+			// }
+			resolve(vulnerabilities);
 		});
 	});
 };
