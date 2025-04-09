@@ -2,6 +2,9 @@ const { spawn, execSync } = require("child_process");
 const axios = require("axios");
 const path = require("path");
 const fs = require("fs");
+const yarnUtils = require("./utils/yarn");
+const jiraUtils = require("./utils/jira");
+const fileUtils = require("./utils/files");
 
 require("dotenv").config(); // Load environment variables from .env
 
@@ -17,92 +20,6 @@ if (!JIRA_API_EMAIL || !JIRA_API_TOKEN || !JIRA_BASE_URL || !JIRA_PROJECT_KEY) {
 	console.error("Missing required environment variables.");
 	process.exit(1);
 }
-// File to track created tickets
-const TRACKING_FILE = "./vulnerabilities-tracked.json";
-
-const getYarnVersion = () => {
-	try {
-		const version = execSync("yarn --version").toString().trim();
-		console.log(`Detected Yarn version: ${version}`);
-		return version;
-	} catch (error) {
-		console.error(
-			"Failed to detect Yarn version. Ensure Yarn is installed and in your PATH.",
-		);
-		process.exit(1);
-	}
-};
-
-const jiraFriendlyCaseSeverity = (severity) => {
-	let jiraSeverity = severity.toLowerCase();
-
-	if (severity === "info") {
-		jiraSeverity = "Minor";
-	} else if (severity === "moderate") {
-		jiraSeverity = "Medium";
-	} else {
-		jiraSeverity = severity.charAt(0).toUpperCase() + severity.slice(1);
-	}
-
-	return jiraSeverity;
-};
-
-const fetchChildIssues = async (epicKey) => {
-	try {
-		// Use JQL to find all child issues linked to the epic
-		const jql = `parent=${epicKey}`;
-		const response = await axios.get(`${JIRA_BASE_URL}/rest/api/2/search`, {
-			params: {
-				jql, // Jira Query Language query
-				fields: "key,summary,status", // Fetch only the fields we care about
-				maxResults: 1000, // Adjust as needed for larger projects
-			},
-			auth: {
-				username: JIRA_API_EMAIL,
-				password: JIRA_API_TOKEN,
-			},
-		});
-
-		// Return the list of child issues
-		return response.data.issues.map((issue) => ({
-			key: issue.key,
-			summary: issue.fields.summary,
-			status: issue.fields.status.name,
-		}));
-	} catch (error) {
-		console.error(
-			`Error fetching child issues for epic ${epicKey}:`,
-			error.response?.data || error.message,
-		);
-		throw error;
-	}
-};
-
-const getJiraTicketStatus = async (ticketKey) => {
-	try {
-		const response = await axios.get(
-			`${JIRA_BASE_URL}/rest/api/2/issue/${ticketKey}`,
-			{
-				auth: {
-					username: JIRA_API_EMAIL,
-					password: JIRA_API_TOKEN,
-				},
-			},
-		);
-		// Extract the status from the response
-		return response.data.fields.status.name;
-	} catch (error) {
-		if (error.response?.status === 404) {
-			console.warn(`Ticket ${ticketKey} not found in Jira.`);
-			return null; // Ticket no longer exists
-		}
-		console.error(
-			`Error fetching ticket status for ${ticketKey}:`,
-			error.response?.data || error.message,
-		);
-		throw error; // Rethrow other errors
-	}
-};
 
 const validateTrackedVulnerabilities = async (trackedVulnerabilities) => {
 	const updatedTrackedVulnerabilities = { ...trackedVulnerabilities };
@@ -113,7 +30,7 @@ const validateTrackedVulnerabilities = async (trackedVulnerabilities) => {
 		console.log(
 			`Checking status of Jira ticket ${ticketKey} for ${module_name}...`,
 		);
-		const status = await getJiraTicketStatus(ticketKey);
+		const status = await jiraUtils.getJiraTicketStatus(ticketKey);
 
 		if (!status) {
 			// Ticket no longer exists, remove it from tracking
@@ -135,14 +52,14 @@ const validateTrackedVulnerabilities = async (trackedVulnerabilities) => {
 	}
 
 	// Save the updated tracking file
-	saveTrackedVulnerabilities(updatedTrackedVulnerabilities);
+	fileUtils.saveTrackedVulnerabilities(updatedTrackedVulnerabilities);
 	return updatedTrackedVulnerabilities;
 };
 
 const validateTrackedWithJira = async (trackedVulnerabilities, epicKey) => {
 	// Fetch the child issues from Jira
 	console.log(`Fetching child issues for epic ${epicKey}...`);
-	const childIssues = await fetchChildIssues(epicKey);
+	const childIssues = await jiraUtils.fetchChildIssues(epicKey);
 
 	// Create a map of child issues from Jira
 	const jiraIssuesMap = {};
@@ -194,20 +111,8 @@ const validateTrackedWithJira = async (trackedVulnerabilities, epicKey) => {
 	});
 
 	// Save the updated tracking file
-	saveTrackedVulnerabilities(updatedTrackedVulnerabilities);
+	fileUtils.saveTrackedVulnerabilities(updatedTrackedVulnerabilities);
 	return updatedTrackedVulnerabilities;
-};
-
-// Helper function to read/write tracked vulnerabilities
-const loadTrackedVulnerabilities = () => {
-	if (fs.existsSync(TRACKING_FILE)) {
-		return JSON.parse(fs.readFileSync(TRACKING_FILE, "utf-8"));
-	}
-	return {};
-};
-
-const saveTrackedVulnerabilities = (data) => {
-	fs.writeFileSync(TRACKING_FILE, JSON.stringify(data, null, 2));
 };
 
 // Run `yarn audit` and parse vulnerabilities
@@ -298,23 +203,6 @@ const runYarnAudit = (yarnVersion) => {
 	});
 };
 
-// Function to load and populate the Jira issue template
-const loadIssueTemplate = (templatePath, data) => {
-	try {
-		// Read the markdown template
-		const template = fs.readFileSync(templatePath, "utf-8");
-
-		// Replace placeholders with actual values
-		return template.replace(
-			/{{(.*?)}}/g,
-			(_, key) => data[key.trim()] || "N/A",
-		);
-	} catch (error) {
-		console.error(`Failed to load issue template: ${error.message}`);
-		process.exit(1); // Exit if the template cannot be loaded
-	}
-};
-
 // Create a Jira ticket for a vulnerability
 const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
 	const {
@@ -330,7 +218,7 @@ const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
 
 	// Load and populate the issue template
 	const templatePath = path.join(__dirname, "templates/jira-issue-template.md");
-	const description = loadIssueTemplate(templatePath, {
+	const description = fileUtils.loadIssueTemplate(templatePath, {
 		id,
 		module_name,
 		issue,
@@ -355,7 +243,7 @@ const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
 				key: JIRA_EPIC_KEY,
 			},
 			priority: {
-				name: jiraFriendlyCaseSeverity(severity), // Set the priority based on severity
+				name: jiraUtils.jiraFriendlyCaseSeverity(severity), // Set the priority based on severity
 			},
 		},
 	};
@@ -386,9 +274,9 @@ const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
 const main = async () => {
 	console.log("Running yarn audit...");
 	// Detect the Yarn version
-	const yarnVersion = getYarnVersion();
+	const yarnVersion = yarnUtils.getYarnVersion();
 
-	let trackedVulnerabilities = loadTrackedVulnerabilities();
+	let trackedVulnerabilities = fileUtils.loadTrackedVulnerabilities();
 
 	// Validate the tracking file against Jira
 	console.log("Validating tracked tickets with Jira...");
@@ -421,7 +309,7 @@ const main = async () => {
 				module_name,
 				ticketKey,
 			};
-			saveTrackedVulnerabilities(trackedVulnerabilities);
+			fileUtils.saveTrackedVulnerabilities(trackedVulnerabilities);
 		}
 	}
 
