@@ -139,6 +139,23 @@ const runYarnAudit = (yarnVersion) => {
 	});
 };
 
+// Function to load and populate the Jira issue template
+const loadIssueTemplate = (templatePath, data) => {
+	try {
+		// Read the markdown template
+		const template = fs.readFileSync(templatePath, "utf-8");
+
+		// Replace placeholders with actual values
+		return template.replace(
+			/{{(.*?)}}/g,
+			(_, key) => data[key.trim()] || "N/A",
+		);
+	} catch (error) {
+		console.error(`Failed to load issue template: ${error.message}`);
+		process.exit(1); // Exit if the template cannot be loaded
+	}
+};
+
 // Create a Jira ticket for a vulnerability
 const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
 	const {
@@ -152,21 +169,26 @@ const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
 		dependents,
 	} = vulnerability;
 
+	// Load and populate the issue template
+	const templatePath = path.join(__dirname, "jira-issue-template.md");
+	const description = loadIssueTemplate(templatePath, {
+		id,
+		module_name,
+		issue,
+		url,
+		severity,
+		vulnerable_versions: vulnerable_versions || "N/A",
+		tree_versions: (tree_versions || []).join(", "),
+		dependents: (dependents || []).join(", "),
+	});
+
 	const issueData = {
 		fields: {
 			project: {
 				key: JIRA_PROJECT_KEY,
 			},
 			summary: `[${severity.toUpperCase()}] Vulnerability in ${module_name}`,
-			description: `**Issue ID**: ${id}
-  **Issue**: ${issue}
-  **Severity**: ${severity}
-  **URL**: [${url}](${url})
-  **Vulnerable Versions**: ${vulnerable_versions || "N/A"}
-  **Tree Versions**: ${tree_versions.join(", ") || "N/A"}
-  **Dependents**: ${dependents.join(", ") || "N/A"}
-  
-  Please address this issue as soon as possible.`,
+			description,
 			issuetype: {
 				name: "Code Task", // Adjust the issue type to match your Jira setup
 			},
