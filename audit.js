@@ -33,6 +33,20 @@ const getYarnVersion = () => {
 	}
 };
 
+const jiraFriendlyCaseSeverity = (severity) => {
+	let jiraSeverity = severity.toLowerCase();
+
+	if (severity === "info") {
+		jiraSeverity = "Minor";
+	} else if (severity === "moderate") {
+		jiraSeverity = "Medium";
+	} else {
+		jiraSeverity = severity.charAt(0).toUpperCase() + severity.slice(1);
+	}
+
+	return jiraSeverity;
+};
+
 const fetchChildIssues = async (epicKey) => {
 	try {
 		// Use JQL to find all child issues linked to the epic
@@ -339,6 +353,9 @@ const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
 			},
 			parent: {
 				key: JIRA_EPIC_KEY,
+			},
+			priority: {
+				name: jiraFriendlyCaseSeverity(severity), // Set the priority based on severity
 			},
 		},
 	};
