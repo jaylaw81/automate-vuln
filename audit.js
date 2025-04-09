@@ -1,5 +1,6 @@
 const { spawn, execSync } = require("child_process");
 const axios = require("axios");
+const path = require("path");
 const fs = require("fs");
 
 require("dotenv").config(); // Load environment variables from .env
@@ -170,7 +171,7 @@ const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
 	} = vulnerability;
 
 	// Load and populate the issue template
-	const templatePath = path.join(__dirname, "jira-issue-template.md");
+	const templatePath = path.join(__dirname, "templates/jira-issue-template.md");
 	const description = loadIssueTemplate(templatePath, {
 		id,
 		module_name,
