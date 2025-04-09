@@ -36,64 +36,35 @@ const runYarnAudit = () => {
 	return new Promise((resolve, reject) => {
 		const vulnerabilities = [];
 
-		const yarnVersion = spawn("yarn", ["--version"]);
+		let spawnCmd = "";
 
-		const spawnCmd = [];
-
-		let yarnSetVersion = "";
-
-		yarnVersion.stdout.on("data", (data) => {
-			console.log(`Yarn version: ${data}`);
-			if (parseInt(data) >= 4) {
-				console.log("Yarn 4 detected. Using yarn npm audit -R --json.");
-				spawnCmd.push("npm", "audit", "-R", "--json");
-				yarnSetVersion = 4;
-			} else {
-				console.log("< Yarn 4 detected. Using yarn audit --json.");
-				spawnCmd.push("audit", "--json");
-				yarnSetVersion = 3;
-			}
-		});
-		const yarnAudit = spawn("yarn", [spawnCmd]);
+		const yarnAudit = spawn("yarn", ["npm", "audit", "-R", "--json"]);
 
 		yarnAudit.stdout.on("data", (data) => {
 			const lines = data.toString().split("\n");
-			if (yarnSetVersion === 4) {
-				lines.forEach((line) => {
-					try {
-						const jsonLine = JSON.parse(line);
+			lines.forEach((line) => {
+				try {
+					const jsonLine = JSON.parse(line);
 
-						// Check if this is a vulnerability report line
-						if (jsonLine.value && jsonLine.children) {
-							const vulnerability = {
-								module_name: jsonLine.value,
-								id: jsonLine.children.ID,
-								issue: jsonLine.children.Issue,
-								url: jsonLine.children.URL,
-								severity: jsonLine.children.Severity,
-								vulnerable_versions: jsonLine.children["Vulnerable Versions"],
-								tree_versions: jsonLine.children["Tree Versions"],
-								dependents: jsonLine.children.Dependents,
-							};
+					// Check if this is a vulnerability report line
+					if (jsonLine.value && jsonLine.children) {
+						const vulnerability = {
+							module_name: jsonLine.value,
+							id: jsonLine.children.ID,
+							issue: jsonLine.children.Issue,
+							url: jsonLine.children.URL,
+							severity: jsonLine.children.Severity,
+							vulnerable_versions: jsonLine.children["Vulnerable Versions"],
+							tree_versions: jsonLine.children["Tree Versions"],
+							dependents: jsonLine.children.Dependents,
+						};
 
-							vulnerabilities.push(vulnerability);
-						}
-					} catch (err) {
-						// Ignore lines that cannot be parsed as JSON
+						vulnerabilities.push(vulnerability);
 					}
-				});
-			} else {
-				lines.forEach((line) => {
-					try {
-						const jsonLine = JSON.parse(line);
-						if (jsonLine.type === "auditAdvisory") {
-							vulnerabilities.push(jsonLine.data.advisory);
-						}
-					} catch (err) {
-						// Ignore lines that cannot be parsed as JSON
-					}
-				});
-			}
+				} catch (err) {
+					// Ignore lines that cannot be parsed as JSON
+				}
+			});
 		});
 
 		yarnAudit.stderr.on("data", (data) => {
@@ -101,18 +72,10 @@ const runYarnAudit = () => {
 		});
 
 		yarnAudit.on("close", (code) => {
-			if (yarnSetVersion === 4) {
-				if (code === 1) {
-					resolve(vulnerabilities);
-				} else {
-					reject(new Error(`yarn audit exited with code ${code}`));
-				}
+			if (code === 1) {
+				resolve(vulnerabilities);
 			} else {
-				if (code === 0) {
-					resolve(vulnerabilities);
-				} else {
-					reject(new Error(`yarn audit exited with code ${code}`));
-				}
+				reject(new Error(`yarn audit exited with code ${code}`));
 			}
 		});
 	});
@@ -120,25 +83,24 @@ const runYarnAudit = () => {
 
 // Create a Jira ticket for a vulnerability
 const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
-	if (yarnSetVersion === 4) {
-		const {
-			module_name,
-			id,
-			issue,
-			url,
-			severity,
-			vulnerable_versions,
-			tree_versions,
-			dependents,
-		} = vulnerability;
+	const {
+		module_name,
+		id,
+		issue,
+		url,
+		severity,
+		vulnerable_versions,
+		tree_versions,
+		dependents,
+	} = vulnerability;
 
-		const issueData = {
-			fields: {
-				project: {
-					key: JIRA_PROJECT_KEY,
-				},
-				summary: `[${severity.toUpperCase()}] Vulnerability in ${module_name}`,
-				description: `**Issue ID**: ${id}
+	const issueData = {
+		fields: {
+			project: {
+				key: JIRA_PROJECT_KEY,
+			},
+			summary: `[${severity.toUpperCase()}] Vulnerability in ${module_name}`,
+			description: `**Issue ID**: ${id}
   **Issue**: ${issue}
   **Severity**: ${severity}
   **URL**: [${url}](${url})
@@ -147,79 +109,34 @@ const createJiraTicket = async (vulnerability, JIRA_EPIC_KEY) => {
   **Dependents**: ${dependents.join(", ") || "N/A"}
   
   Please address this issue as soon as possible.`,
-				issuetype: {
-					name: "Code Task", // Adjust the issue type to match your Jira setup
-				},
-				parent: {
-					key: JIRA_EPIC_KEY,
+			issuetype: {
+				name: "Code Task", // Adjust the issue type to match your Jira setup
+			},
+			parent: {
+				key: JIRA_EPIC_KEY,
+			},
+		},
+	};
+
+	try {
+		const response = await axios.post(
+			`${JIRA_BASE_URL}/rest/api/2/issue`,
+			issueData,
+			{
+				auth: {
+					username: JIRA_API_EMAIL,
+					password: JIRA_API_TOKEN,
 				},
 			},
-		};
-
-		try {
-			const response = await axios.post(
-				`${JIRA_BASE_URL}/rest/api/2/issue`,
-				issueData,
-				{
-					auth: {
-						username: JIRA_API_EMAIL,
-						password: JIRA_API_TOKEN,
-					},
-				},
-			);
-			console.log(`Created Jira ticket: ${response.data.key}`);
-			return response.data.key;
-		} catch (error) {
-			console.error(
-				"Error creating Jira ticket:",
-				error.response?.data || error.message,
-			);
-			return null;
-		}
-	} else {
-		const { module_name, severity, cwe, recommendation } = vulnerability;
-		const issueData = {
-			fields: {
-				project: {
-					key: JIRA_PROJECT_KEY,
-				},
-				summary: `[${severity.toUpperCase()}] Vulnerability in ${module_name}`,
-				description: `A vulnerability was detected in module ${module_name}.
-      
-**Severity**: ${severity}
-**CWE**: ${cwe || "N/A"}
-**Recommendation**: ${recommendation || "No recommendation provided."}
-
-Please address this issue.`,
-				issuetype: {
-					name: "Code Task",
-				},
-				parent: {
-					key: JIRA_EPIC_KEY,
-				},
-			},
-		};
-
-		try {
-			const response = await axios.post(
-				`${JIRA_BASE_URL}/rest/api/2/issue`,
-				issueData,
-				{
-					auth: {
-						username: JIRA_API_EMAIL,
-						password: JIRA_API_TOKEN,
-					},
-				},
-			);
-			console.log(`Created Jira ticket: ${response.data.key}`);
-			return response.data.key;
-		} catch (error) {
-			console.error(
-				"Error creating Jira ticket:",
-				error.response?.data || error.message,
-			);
-			return null;
-		}
+		);
+		console.log(`Created Jira ticket: ${response.data.key}`);
+		return response.data.key;
+	} catch (error) {
+		console.error(
+			"Error creating Jira ticket:",
+			error.response?.data || error.message,
+		);
+		return null;
 	}
 };
 
