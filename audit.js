@@ -129,6 +129,7 @@ const runYarnAudit = (yarnVersion) => {
 		}
 
 		yarnAudit.stdout.on("data", (data) => {
+			console.log(data.toString());
 			const lines = data.toString().split("\n");
 			for (const line of lines) {
 				try {
@@ -299,18 +300,19 @@ const main = async () => {
 			continue;
 		}
 
-		console.log(
-			`Creating Jira ticket for vulnerability ${id} (${module_name})...`,
-		);
-		const ticketKey = await createJiraTicket(vulnerability, JIRA_EPIC_KEY);
+		// Ticket creation logic
+		// console.log(
+		// 	`Creating Jira ticket for vulnerability ${id} (${module_name})...`,
+		// );
+		// const ticketKey = await createJiraTicket(vulnerability, JIRA_EPIC_KEY);
 
-		if (ticketKey) {
-			trackedVulnerabilities[id] = {
-				module_name,
-				ticketKey,
-			};
-			fileUtils.saveTrackedVulnerabilities(trackedVulnerabilities);
-		}
+		// if (ticketKey) {
+		// 	trackedVulnerabilities[id] = {
+		// 		module_name,
+		// 		ticketKey,
+		// 	};
+		// 	fileUtils.saveTrackedVulnerabilities(trackedVulnerabilities);
+		// }
 	}
 
 	console.log("Script completed.");
